@@ -6,15 +6,20 @@
 
 ## Capturas de pantalla
 
-| Dashboard | Registro por voz | Mis Gastos |
-|:---------:|:----------------:|:----------:|
-| ![Dashboard](assets/screenshots/dashboard.png) | ![Voz](assets/screenshots/voz.png) | ![Gastos](assets/screenshots/gastos.png) |
+### Dashboard
 
-| Importar | Configuración |
-|:--------:|:-------------:|
-| ![Importar](assets/screenshots/importar.png) | ![Config](assets/screenshots/config.png) |
+<p align="center">
+  <img src="assets/screenshots/dashboard_1.png" width="30%">
+  <img src="assets/screenshots/dashboard_2.png" width="30%">
+  <img src="assets/screenshots/dashboard_3.png" width="30%">
+</p>
 
-> **Nota:** Para agregar capturas, crea la carpeta `assets/screenshots/` y guarda las imágenes con los nombres indicados arriba.
+### Registro por voz e Importación
+
+<p align="center">
+  <img src="assets/screenshots/voz.png" width="30%">
+  <img src="assets/screenshots/importar.png" width="30%">
+</p>
 
 ---
 
