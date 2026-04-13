@@ -92,6 +92,73 @@ Devuelve ÚNICAMENTE este JSON válido:
   }
 }
 
+// ── PDF: extrae todos los gastos de un estado de cuenta ──────────────────────
+
+export async function procesarPDFGastos(base64: string): Promise<{
+  gastos: Array<{ fecha: string; lugar: string; concepto: string; tarjeta: string; monto: number }>;
+  totalEncontrados: number;
+}> {
+  const hoy = format(new Date(), 'yyyy-MM-dd');
+
+  const prompt = `Analiza este estado de cuenta bancario en PDF y extrae TODOS los movimientos de cargo/gasto.
+Ignora pagos, abonos, depósitos y devoluciones — solo incluye cargos o compras.
+
+Para cada gasto devuelve:
+- fecha: formato YYYY-MM-DD (si no hay año usa el año actual)
+- lugar: nombre del comercio o establecimiento (tal como aparece, limpio y legible)
+- concepto: UNA de estas categorías: Gasolina, Comida, Restaurante, Supermercado, Ropa, Entretenimiento, Salud, Farmacia, Transporte, Servicios, Educación, Hogar, Tecnología, Viajes, Deporte, Belleza, Mascotas, Regalos, Suscripciones, Otro
+- tarjeta: nombre del banco o tarjeta si aparece en el documento, si no usa "Efectivo"
+- monto: número positivo sin símbolos de moneda
+
+Devuelve ÚNICAMENTE este JSON válido (sin texto adicional):
+{
+  "gastos": [
+    { "fecha": "YYYY-MM-DD", "lugar": "nombre", "concepto": "categoria", "tarjeta": "banco", "monto": 0 }
+  ]
+}
+
+Fecha de referencia si necesitas inferir el año: ${hoy}`;
+
+  try {
+    const response = await axios.post(
+      `${GEMINI_URL}?key=${GEMINI_API_KEY}`,
+      {
+        contents: [{
+          parts: [
+            { text: prompt },
+            { inlineData: { mimeType: 'application/pdf', data: base64 } },
+          ],
+        }],
+        generationConfig: {
+          temperature: 0.1,
+          responseMimeType: 'application/json',
+        },
+      },
+      {
+        headers: { 'Content-Type': 'application/json' },
+        timeout: 120000,
+      }
+    );
+
+    const content = response.data.candidates[0].content.parts[0].text as string;
+    const parsed = JSON.parse(content);
+    const gastos = Array.isArray(parsed.gastos) ? parsed.gastos : [];
+
+    return {
+      gastos: gastos.map((g: Record<string, unknown>) => ({
+        fecha: String(g.fecha ?? hoy),
+        lugar: String(g.lugar ?? 'Sin lugar').toUpperCase(),
+        concepto: String(g.concepto ?? 'Otro').toUpperCase(),
+        tarjeta: String(g.tarjeta ?? 'Efectivo').toUpperCase(),
+        monto: Number(g.monto ?? 0),
+      })).filter((g: { monto: number }) => g.monto > 0),
+      totalEncontrados: gastos.length,
+    };
+  } catch (e) {
+    manejarErrorGemini(e);
+  }
+}
+
 // ── Funciones individuales (mantenidas por compatibilidad) ────────────────────
 
 export async function transcribirAudio(audioUri: string): Promise<string> {

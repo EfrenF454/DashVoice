@@ -18,6 +18,7 @@ import { useTheme } from '@/contexts/ThemeContext';
 import { CONCEPTOS, TARJETAS } from '@/constants/Categories';
 import { formatMonto } from '@/utils/formatters';
 import { crearGasto, crearGastos } from '@/services/supabase';
+import { procesarPDFGastos } from '@/services/openai';
 import { useExpenseStore } from '@/store/expenseStore';
 import type { GastoInput } from '@/types';
 
@@ -87,7 +88,7 @@ function parsearFilas(rows: Record<string, unknown>[]): { gastos: GastoInput[]; 
 
 export default function ImportarScreen() {
   const { colors } = useTheme();
-  const [tab, setTab] = useState<'excel' | 'manual'>('excel');
+  const [tab, setTab] = useState<'excel' | 'pdf' | 'manual'>('excel');
 
   const styles = useMemo(() => createStyles(colors), [colors]);
 
@@ -96,7 +97,7 @@ export default function ImportarScreen() {
       {/* Header */}
       <View style={styles.header}>
         <Text style={styles.titulo}>Importar gastos</Text>
-        <Text style={styles.subtitulo}>Sube tu Excel o agrega un gasto manualmente</Text>
+        <Text style={styles.subtitulo}>Excel, estado de cuenta PDF o ingreso manual</Text>
       </View>
 
       {/* Selector de tab */}
@@ -106,7 +107,15 @@ export default function ImportarScreen() {
           onPress={() => setTab('excel')}
         >
           <Text style={[styles.tabBtnTexto, tab === 'excel' && styles.tabBtnTextoActivo]}>
-            📊 Importar Excel
+            📊 Excel
+          </Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[styles.tabBtn, tab === 'pdf' && styles.tabBtnActivo]}
+          onPress={() => setTab('pdf')}
+        >
+          <Text style={[styles.tabBtnTexto, tab === 'pdf' && styles.tabBtnTextoActivo]}>
+            📄 PDF
           </Text>
         </TouchableOpacity>
         <TouchableOpacity
@@ -114,12 +123,12 @@ export default function ImportarScreen() {
           onPress={() => setTab('manual')}
         >
           <Text style={[styles.tabBtnTexto, tab === 'manual' && styles.tabBtnTextoActivo]}>
-            ✏️ Agregar manual
+            ✏️ Manual
           </Text>
         </TouchableOpacity>
       </View>
 
-      {tab === 'excel' ? <TabExcel /> : <TabManual />}
+      {tab === 'excel' ? <TabExcel /> : tab === 'pdf' ? <TabPDF /> : <TabManual />}
     </SafeAreaView>
   );
 }
@@ -317,6 +326,191 @@ function TabExcel() {
         <View style={styles.vacioBanner}>
           <Text style={styles.vacioTexto}>
             No se encontraron filas válidas. Verifica que el archivo tenga los encabezados correctos y valores de monto mayores a 0.
+          </Text>
+        </View>
+      )}
+    </ScrollView>
+  );
+}
+
+// ── Tab: Importar PDF ────────────────────────────────────────────────────────
+
+function TabPDF() {
+  const { colors } = useTheme();
+  const { cargarGastos } = useExpenseStore();
+  const [cargando, setCargando] = useState(false);
+  const [preview, setPreview] = useState<GastoInput[] | null>(null);
+  const [nombreArchivo, setNombreArchivo] = useState('');
+  const [importando, setImportando] = useState(false);
+  const [mensaje, setMensaje] = useState('');
+
+  const styles = useMemo(() => createStyles(colors), [colors]);
+
+  const seleccionarPDF = async () => {
+    try {
+      setCargando(true);
+      setPreview(null);
+      setMensaje('');
+
+      const resultado = await DocumentPicker.getDocumentAsync({
+        type: 'application/pdf',
+        copyToCacheDirectory: true,
+      });
+
+      if (resultado.canceled) return;
+
+      const archivo = resultado.assets[0];
+      setNombreArchivo(archivo.name);
+      setMensaje('Analizando estado de cuenta con IA…');
+
+      const base64 = await FileSystem.readAsStringAsync(archivo.uri, {
+        encoding: FileSystem.EncodingType.Base64,
+      });
+
+      const { gastos } = await procesarPDFGastos(base64);
+      setPreview(gastos);
+      setMensaje('');
+    } catch (e) {
+      setMensaje('');
+      Alert.alert('Error', `No se pudo procesar el PDF: ${(e as Error).message}`);
+    } finally {
+      setCargando(false);
+    }
+  };
+
+  const confirmarImportacion = async () => {
+    if (!preview || preview.length === 0) return;
+    setImportando(true);
+    try {
+      const LOTE = 100;
+      let total = 0;
+      for (let i = 0; i < preview.length; i += LOTE) {
+        const lote = preview.slice(i, i + LOTE);
+        total += await crearGastos(lote);
+      }
+      await cargarGastos();
+      setPreview(null);
+      setNombreArchivo('');
+      Alert.alert('✅ Importación completa', `Se importaron ${total} gastos del estado de cuenta.`);
+    } catch (e) {
+      Alert.alert('Error al importar', (e as Error).message);
+    } finally {
+      setImportando(false);
+    }
+  };
+
+  return (
+    <ScrollView
+      style={styles.scroll}
+      contentContainerStyle={styles.scrollContent}
+      showsVerticalScrollIndicator={false}
+    >
+      {/* Info */}
+      <View style={styles.card}>
+        <Text style={styles.cardTitulo}>Estado de cuenta en PDF</Text>
+        <Text style={styles.cardSub}>
+          Sube tu estado de cuenta bancario en PDF. La IA leerá el documento y extraerá automáticamente todos los cargos.
+        </Text>
+        <View style={styles.columnasList}>
+          {[
+            ['🏦', 'Compatible con cualquier banco'],
+            ['🤖', 'Gemini AI extrae fecha, lugar, monto y categoría'],
+            ['👀', 'Revisa los datos antes de importar'],
+          ].map(([emoji, desc]) => (
+            <View key={desc} style={styles.columnaItem}>
+              <Text style={styles.columnaEmoji}>{emoji}</Text>
+              <Text style={styles.cardSub}>{desc}</Text>
+            </View>
+          ))}
+        </View>
+      </View>
+
+      {/* Botón seleccionar */}
+      <TouchableOpacity
+        style={styles.btnSeleccionar}
+        onPress={seleccionarPDF}
+        disabled={cargando || importando}
+      >
+        {cargando ? (
+          <ActivityIndicator color={colors.primary} />
+        ) : (
+          <>
+            <Text style={styles.btnSeleccionarIcono}>📄</Text>
+            <Text style={styles.btnSeleccionarTexto}>
+              {nombreArchivo || 'Seleccionar estado de cuenta PDF'}
+            </Text>
+          </>
+        )}
+      </TouchableOpacity>
+
+      {/* Mensaje de progreso */}
+      {!!mensaje && (
+        <View style={[styles.card, { flexDirection: 'row', alignItems: 'center', gap: 12 }]}>
+          <ActivityIndicator color={colors.primary} />
+          <Text style={[styles.cardSub, { flex: 1 }]}>{mensaje}</Text>
+        </View>
+      )}
+
+      {/* Preview */}
+      {preview && preview.length > 0 && (
+        <View style={styles.card}>
+          <View style={styles.previewHeader}>
+            <Text style={styles.cardTitulo}>Vista previa</Text>
+            <View style={[styles.badge, { backgroundColor: `${colors.success}22` }]}>
+              <Text style={[styles.badgeTexto, { color: colors.success }]}>
+                {preview.length} gastos encontrados
+              </Text>
+            </View>
+          </View>
+
+          <View style={styles.tabla}>
+            <View style={[styles.tablaFila, styles.tablaHeader]}>
+              <Text style={[styles.tablaCelda, styles.tablaCeldaFecha, styles.tablaHeaderTexto]}>Fecha</Text>
+              <Text style={[styles.tablaCelda, { flex: 2 }, styles.tablaHeaderTexto]}>Lugar</Text>
+              <Text style={[styles.tablaCelda, styles.tablaCeldaMonto, styles.tablaHeaderTexto]}>Monto</Text>
+            </View>
+            {preview.slice(0, 8).map((g, i) => (
+              <View key={i} style={[styles.tablaFila, i % 2 === 0 && styles.tablaFilaPar]}>
+                <Text style={[styles.tablaCelda, styles.tablaCeldaFecha]} numberOfLines={1}>
+                  {g.fecha}
+                </Text>
+                <Text style={[styles.tablaCelda, { flex: 2 }]} numberOfLines={1}>
+                  {g.lugar}
+                </Text>
+                <Text style={[styles.tablaCelda, styles.tablaCeldaMonto]}>
+                  {formatMonto(g.monto, true)}
+                </Text>
+              </View>
+            ))}
+            {preview.length > 8 && (
+              <Text style={styles.masFilas}>… y {preview.length - 8} registros más</Text>
+            )}
+          </View>
+
+          <TouchableOpacity
+            style={[styles.btnImportar, importando && { opacity: 0.6 }]}
+            onPress={confirmarImportacion}
+            disabled={importando}
+          >
+            {importando ? (
+              <ActivityIndicator color="#fff" />
+            ) : (
+              <Text style={styles.btnImportarTexto}>
+                Importar {preview.length} gastos
+              </Text>
+            )}
+          </TouchableOpacity>
+
+          <TouchableOpacity onPress={() => { setPreview(null); setNombreArchivo(''); }}>
+            <Text style={styles.cancelarTexto}>Cancelar</Text>
+          </TouchableOpacity>
+        </View>
+      )}
+
+      {preview?.length === 0 && (
+        <View style={styles.vacioBanner}>
+          <Text style={styles.vacioTexto}>
+            No se encontraron cargos en el PDF. Verifica que sea un estado de cuenta válido.
           </Text>
         </View>
       )}
